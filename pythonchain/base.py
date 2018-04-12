@@ -4,6 +4,9 @@ with data fields, as well-defined byte-sequences.
 """
 
 from collections import OrderedDict
+from collections.abc import MutableSequence, Sequence, Iterable
+
+from decimal import Decimal as _Decimal
 
 def _init_field_dictionary(cls):
     cls.fields = OrderedDict()
@@ -131,6 +134,25 @@ class String(Field):
         return raw.decode(cls.encoding), end_pos
 
 
+class Decimal(String):
+
+    def __init__(self, default="0"):
+        super().__init__(default)
+
+    def __set__(self, instance, value):
+        if isinstance(value, float):
+            value = str(value)
+        x = _Decimal(value)  #  noQA - Just for checking if it is a well formed decimal.
+        super().__set__(instance, str(value))
+
+    def __get__(self, instance, owner=None):
+        value = super().__get__(instance, owner)
+        if owner:
+            return _Decimal(super().__get__(instance, owner))
+        # else: owner == None implies we are called from the serializer
+        return value
+
+
 class Base:
 
     def __init__(self, **kwargs):
@@ -148,13 +170,104 @@ class Base:
         return bytes(state)
 
     @classmethod
-    def from_data(cls, data):
+    def from_data(cls, data, offset=0):
         self = cls()
-        offset = 0
         for field_name, field in cls.fields.items():
             field_data, offset = field.import_(data, offset)
             setattr(self, field_name, field_data)
+        # optional state, used when objects are restored in sequence
+        # from an outer stream
+        self._offset = offset
         return self
+
+
+def sequence_factory(sequence_type):
+    class InnerSequence(MutableSequence):
+        maxlen = 2 ** 16
+
+        def __init__(self):
+            self.type = sequence_type
+            self.data = []
+
+        def __getitem__(self, index):
+            return self.data[index]
+
+        def __setitem__(self, index, value):
+            if not isinstance(value, self.type):
+                raise TypeError(f"Items must be instances of '{self.type.__name__}'")
+            self.data[index] = value
+
+        def __delitem__(self, index):
+            del self.data[index]
+
+        def __len__(self):
+            return len(self.data)
+
+        def insert(self, index, value):
+            if not isinstance(value, self.type):
+                raise TypeError(f"Items must be instances of '{self.type.__name__}'")
+            if index >= self.maxlen:
+                raise IndexError(f"Maximum number of itens is {self.maxlen}")
+            self.data.insert(index, value)
+
+        def fill(self, sequence):
+            self.data[:] = []
+            for value in sequence:
+                self.append(value)
+
+        def __repr__(self):
+            return repr(self.data)
+
+    return InnerSequence
+
+
+type_ = type
+
+class SequenceField(Field):
+    """Allows a sequence of Base models to be used as a field"""
+    type = None
+    len_bytes = 2
+
+    def __init__(self, type, default=None):
+        if not issubclass(type, Base):
+            raise TypeError("Types for sequence should be a Base type. Add fields to it")
+        self.type = type
+        super().__init__(default=sequence_factory(type))
+        self._initialized = True
+
+    def __get__(self, instance, owner=None):
+        if not instance:
+            return self
+        return instance.__dict__.setdefault(self.name, self.default())
+
+    def __set__(self, instance, value):
+        if not isinstance(value, (Sequence, Iterable)):
+            raise TypeError("This field can only be set to a sequence of '{self.type.__name__}' objects")
+        self.__get__(instance).fill(value)
+
+    def serialize(self, instance):
+        """returns a representation of self as bytes"""
+        if issubclass(self.type, Base):
+            data = self.__get__(instance)
+            return len(data).to_bytes(self.len_bytes, "little") + b"".join(obj.serialize() for obj in data)
+        raise NotImplementedError # Todo: allow items to be Fields, instead of just Base objects
+
+
+    def import_(self, data, offset=0)->(object, int):
+        """Return data that can be set as this field content
+        """
+        cls = self.__class__
+        start_pos = offset + cls.len_bytes
+        length = int.from_bytes(data[offset: start_pos], "little")
+        offset += cls.len_bytes
+        result = []
+        for i in range(length):
+            result.append(self.type.from_data(data, offset))
+            offset = result[-1]._offset
+
+        return result, offset
+
+
 
 class Test0(Base):
     a = Field()
@@ -162,6 +275,9 @@ class Test0(Base):
     c = UInt8()
     d = UInt64()
     e = String()
+    f = Decimal()
 
+class Test1(Base):
+    g = SequenceField(Test0)
 
 
