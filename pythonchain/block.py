@@ -1,4 +1,5 @@
 import itertools
+import uuid
 
 import Crypto
 import Crypto.Random
@@ -13,10 +14,19 @@ from pythonchain.runtime import registry
 TOKENMULTIPLIER = 100000000  # 100 million
 
 class TransactionError(Exception):
-    pass
+    """Base Blockchain Exception"""
+
+
+class InvalidOutputReferenceError(TransactionError):
+    """Tried to use invalid output in a transaction"""
+
 
 class SecretError(TransactionError):
     """Error in signature checking"""
+
+
+class WalletError(TransactionError):
+    """Error in wallet used"""
 
 
 class AlreadySpentError(TransactionError):
@@ -48,9 +58,15 @@ class Wallet(base.Base):
 
 
 class TransactionOutput(base.Base):
+    ID = base.UInt128()
     wallet = base.String()
     amount = base.UInt64()
     extra_data = base.String()
+
+    def __init__(self, **kwargs):
+        kwargs.setdefault("ID", int(uuid.uuid4()))
+        super().__init__(**kwargs)
+
 
 class TransactionInput(base.Base):
     transaction = base.UInt128()
@@ -59,8 +75,12 @@ class TransactionInput(base.Base):
 
     def verify(self):
 
-        output = registry["blockchain"].get_transaction(self.transaction).outputs[self.index]
-        pubkey = ECC.import_key(bytes.fromhex(output.wallet))
+        try:
+            output = registry["blockchain"].get_output_from_input(self)
+            pubkey = ECC.import_key(bytes.fromhex(output.wallet))
+        except Exception as error:
+            raise InvalidOutputReferenceError from error
+
         verifier = DSS.new(pubkey, "fips-186-3")
         # privkey = ECC.import_key(key)
         # signer = DSS.new(privkey, "fips-186-3")
@@ -80,7 +100,7 @@ class Transaction(base.Base):
     signature = base.UInt512()
 
     def __init__(self, **kwargs):
-        kwargs.setdefault("ID". uuid.uuid4().int)
+        kwargs.setdefault("ID", int(uuid.uuid4()))
         self.blockchain = registry["blockchain"]
         super().__init__(**kwargs)
 
@@ -105,10 +125,10 @@ class Transaction(base.Base):
             raise AmountError(f"Total fee is negative '{output_amount - input_amount}'")
         return output_amount - input_amount
 
-    def verify(self, keys):
+    def verify(self):
         # TODO - we don't get a set of keys - we get a set of signatures
         # the private-key is never sent over the network.
-        for input in self.input:
+        for input in self.inputs:
             input.verify()
 
     def sign_transaction(self, private_key):
@@ -145,9 +165,7 @@ class BlockChain:
                 if inp.transaction in inputs:
                     raise AlreadySpentError
 
-
-
-    def get_transaction(id):
+    def get_transaction(self, id):
         try:
             return self.transactions[id]
         except KeyError:
@@ -159,3 +177,11 @@ class BlockChain:
     def all_transactions(self):
         # TODO: return transactions from all blocks in the chain
         return self.transactions.values()
+
+    def get_output_from_input(self, input):
+        try:
+            inp_transaction = self.get_transaction(input.transaction)
+            output = inp_transaction.outputs[input.index]
+        except Exception as error:
+            raise WalletError from error
+        return output
