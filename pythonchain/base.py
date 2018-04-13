@@ -83,6 +83,9 @@ class Int(Field):
 
 UInt64 = Int
 
+class UInt512(Int):
+    data_size = 64
+
 class UInt128(Int):
     data_size = 16
 
