@@ -83,6 +83,9 @@ class Int(Field):
 
 UInt64 = Int
 
+class UInt128(Int):
+    data_size = 16
+
 class Int64(Int):
     neg = True
 
@@ -181,6 +184,27 @@ class Base:
         return self
 
 
+class ModelField(Field):
+    """Field able to hold a single copy of any model derived form Base"""
+
+    type = Base
+
+    def __init__(self, type):
+        self.type = type
+        super().__init__(default=type())
+
+    def serialize(self, instance):
+        """returns a representation of self as bytes"""
+        return self.__get__(instance).serialize()
+
+    def import_(self, data, offset=0)->(object, int):
+        cls = self.__class__
+        result = self.type.from_data(data, offset)
+
+        return result, result._offset
+
+
+
 def sequence_factory(sequence_type):
     class InnerSequence(MutableSequence):
         maxlen = 2 ** 16
@@ -277,7 +301,15 @@ class Test0(Base):
     e = String()
     f = Decimal()
 
+
 class Test1(Base):
     g = SequenceField(Test0)
+
+
+class Test2(Base):
+    h = ModelField(Test1)
+    i = ModelField(Test0)
+
+
 
 
