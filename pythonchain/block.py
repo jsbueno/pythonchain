@@ -104,30 +104,19 @@ class Transaction(base.Base):
         self.blockchain = registry["blockchain"]
         super().__init__(**kwargs)
 
-    def get_output_from_input(self, inp):
-        inp_transaction = self.blockchain.get_transaction(inp.transaction)
-        output = inp_transaction[inp.index]
-        return output
 
+    def get_fee(self):
 
-    def validate_and_get_fee(self, secret):
-
-        input_amount = 0
-        for inp in self.inputs:
-            inp.verify(secret)
-            output = self.get_output_from_input(inp)
-            input_amount += output.amount
-        output_amount = 0
-        for out in self.outputs:
-            output_amount += output.amount
+        self.verify()
+        bl = registry["blockchain"]
+        input_amount = sum(bl.get_output_from_input(inp).amount for inp in self.inputs)
+        output_amount = sum(out.amount for out in self.outputs)
 
         if output_amount > input_amount:
             raise AmountError(f"Total fee is negative '{output_amount - input_amount}'")
-        return output_amount - input_amount
+        return input_amount - output_amount
 
     def verify(self):
-        # TODO - we don't get a set of keys - we get a set of signatures
-        # the private-key is never sent over the network.
         for input in self.inputs:
             input.verify()
 
