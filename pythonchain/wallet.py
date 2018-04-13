@@ -33,26 +33,3 @@ class Wallet(base.Base):
         }
 
         return response
-
-
-    def sign_transaction_input(self, input, output=None):
-        private_key = ECC.import_key(bytes.fromhex(self.private_key))
-        signer = DSS.new(private_key, 'fips-186-3')
-        output = output or registry["blockchain"].get_output_from_input(input)
-        hash_ = SHA256.new(output.serialize())
-        input.signature = int.from_bytes(signer.sign(hash_), "little")
-
-
-def sign_transaction(transaction, wallets):
-    if isinstance(wallets, (Sequence, Iterable)):
-        wallets = {wallet.public_key: wallet for wallet in wallets}
-    elif isinstance(wallets, Wallet):
-        wallets = {wallets.public_key: wallets}
-
-    for input in transaction.inputs:
-        output = registry["blockchain"].get_output_from_input(input)
-        try:
-            wallets[output.wallet].sign_transaction_input(input, output)
-        except KeyError as error:
-            raise block.WalletError from error
-

@@ -1,3 +1,4 @@
+from collections.abc import Sequence, Iterable
 import itertools
 import uuid
 
@@ -92,6 +93,13 @@ class TransactionInput(base.Base):
         except ValueError as check_fail:
             raise SecretError from check_fail
 
+    def sign(self, wallet):
+        private_key = ECC.import_key(bytes.fromhex(wallet.private_key))
+        signer = DSS.new(private_key, 'fips-186-3')
+        output = registry["blockchain"].get_output_from_input(self)
+        hash_ = SHA256.new(output.serialize())
+        self.signature = int.from_bytes(signer.sign(hash_), "little")
+
 
 class Transaction(base.Base):
     ID = base.UInt128()
@@ -106,7 +114,6 @@ class Transaction(base.Base):
 
 
     def get_fee(self):
-
         self.verify()
         bl = registry["blockchain"]
         input_amount = sum(bl.get_output_from_input(inp).amount for inp in self.inputs)
@@ -119,18 +126,54 @@ class Transaction(base.Base):
     def verify(self):
         for input in self.inputs:
             input.verify()
+        self.verify_transaction_signature()
 
-    def sign_transaction(self, private_key):
+    def verify_transaction_signature(self):
+        wallet = registry["blockchain"].get_output_from_input(self.inputs[0]).wallet
+        pubkey = ECC.import_key(bytes.fromhex(wallet))
+
+        verifier = DSS.new(pubkey, "fips-186-3")
+
+        signature = self.signature
+        self.signature = 0
+        hash_ = SHA256.new(self.serialize())
+        self.signature = signature
+        try:
+            verifier.verify(hash_, signature.to_bytes(64, "little"))
+
+        except ValueError as check_fail:
+            raise SecretError("Invalid transaction signature")
+
+
+
+    def sign_transaction(self, wallets):
         """
         Sign transaction with private key
         # based on https://github.com/adilmoujahid/blockchain-python-tutorial/blob/master/blockchain_client/blockchain_client.py
         """
-        private_key = ECC.import_key(bytes.fromhex(private_key))
-        signer = DSS.new(private_key, 'fips-186-3')
+        from .wallet import Wallet
 
+        if isinstance(wallets, (Sequence, Iterable)):
+            wallets = {wallet.public_key: wallet for wallet in wallets}
+        elif isinstance(wallets, Wallet):
+            wallets = {wallets.public_key: wallets}
+
+        for input in self.inputs:
+            output = registry["blockchain"].get_output_from_input(input)
+            try:
+                input.sign(wallets[output.wallet])
+            except KeyError as error:
+                raise block.WalletError from error
+
+        # Use the wallet used for the first input to sign the whole transaction
+        signer_wallet = registry["blockchain"].get_output_from_input(self.inputs[0]).wallet
+        wallet = wallets[signer_wallet]
+
+        private_key = ECC.import_key(bytes.fromhex(wallet.private_key))
+        signer = DSS.new(private_key, 'fips-186-3')
         self.signature = 0
-        h = SHA256.new(self.serialize())
-        self.signature = int.from_bytes(signer.sign(h), "little")
+        hash_ = SHA256.new(self.serialize())
+        self.signature = int.from_bytes(signer.sign(hash_), "little")
 
 
 
