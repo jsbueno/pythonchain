@@ -1,4 +1,4 @@
-from collections.abc import Sequence, Iterable
+from collections.abc import Sequence, Iterable, MutableSequence
 import itertools
 import uuid
 
@@ -80,7 +80,7 @@ class TransactionInput(base.Base):
     def verify(self):
 
         try:
-            output = registry["blockchain"].get_output_from_input(self)
+            output = BlockChain().get_output_from_input(self)
             pubkey = ECC.import_key(bytes.fromhex(output.wallet))
         except Exception as error:
             raise InvalidOutputReferenceError from error
@@ -99,7 +99,7 @@ class TransactionInput(base.Base):
     def sign(self, wallet):
         private_key = ECC.import_key(bytes.fromhex(wallet.private_key))
         signer = DSS.new(private_key, 'fips-186-3')
-        output = registry["blockchain"].get_output_from_input(self)
+        output = BlockChain().get_output_from_input(self)
         hash_ = SHA256.new(output.serialize())
         self.signature = int.from_bytes(signer.sign(hash_), "little")
 
@@ -114,7 +114,7 @@ class Transaction(base.Base):
     def __init__(self, **kwargs):
         kwargs.setdefault("ID", int(uuid.uuid4()))
         kwargs.setdefault("transaction_type", 0)  # 0 indicates normal transaction. 1 is for reward transaction
-        self.blockchain = registry["blockchain"]
+        self.blockchain = BlockChain()
         super().__init__(**kwargs)
 
 
@@ -123,7 +123,7 @@ class Transaction(base.Base):
         if self.transaction_type == 1:
             # Reward transaction - balance comes out of thin air
             return 0
-        bl = registry["blockchain"]
+        bl = BlockChain()
         input_amount = sum(bl.get_output_from_input(inp).amount for inp in self.inputs)
         output_amount = sum(out.amount for out in self.outputs)
 
@@ -139,7 +139,7 @@ class Transaction(base.Base):
     def verify_transaction_signature(self):
         if self.transaction_type == 1:
             return
-        wallet = registry["blockchain"].get_output_from_input(self.inputs[0]).wallet
+        wallet = BlockChain().get_output_from_input(self.inputs[0]).wallet
         pubkey = ECC.import_key(bytes.fromhex(wallet))
 
         verifier = DSS.new(pubkey, "fips-186-3")
@@ -169,7 +169,7 @@ class Transaction(base.Base):
             wallets = {wallets.public_key: wallets}
 
         for input in self.inputs:
-            output = registry["blockchain"].get_output_from_input(input)
+            output = BlockChain().get_output_from_input(input)
             try:
                 input.sign(wallets[output.wallet])
             except KeyError as error:
@@ -177,7 +177,7 @@ class Transaction(base.Base):
 
         # Use the wallet used for the first input to sign the whole transaction
         if self.inputs:
-            signer_wallet = registry["blockchain"].get_output_from_input(self.inputs[0]).wallet
+            signer_wallet = BlockChain().get_output_from_input(self.inputs[0]).wallet
             wallet = wallets[signer_wallet]
         elif self.transaction_type == 1:  # we have input if we are a reward transaction
             wallet = next(iter(wallets.values()))
@@ -193,7 +193,7 @@ class Transaction(base.Base):
 
 
 class Block(base.Base):
-    block_number = base.UInt32()
+    number = base.UInt32()
     previous_block = base.UInt256()
     transactions = base.SequenceField(Transaction)
     nonce = base.UInt128()
@@ -205,7 +205,7 @@ class Block(base.Base):
         self.state = "new"
 
     def fetch_transactions(self):
-        bl = registry["blockchain"]
+        bl = BlockChain()
         self.transactions.fill(bl.transaction_pool.values())
 
     def set_previous(self, block):
@@ -256,15 +256,60 @@ def mine_block(block):
     while not block.check_difficulty():
         block.nonce = int(uuid.uuid4())
 
+def create_block_zero():
+    blockchain = BlockChain.__new__(BlockChain)
+    blockchain.file = registry["blockchain_file"]
+    blockchain.blocks = []
 
-class BlockChain:
+    # registry["blockchain"] = blockchain
+
+    bl = Block()
+    bl.difficulty = 1
+    bl.number = 0
+    tr = Transaction()
+    tr.transaction_type = 1
+    bl.previous_block = 0
+    bl.make_reward()
+    mine_block(bl)
+    # Add block directly to internal data structure: skip verification
+    # on blockchain.append code
+    blockchain.blocks.append(bl)
+    blockchain.last_read_block = -1
+    blockchain.commit_unwriten_blocks()
+
+
+class BlockChain(MutableSequence):
+    """the blockchain
+    """
+
+    def __new__(cls, *args, **kwargs):
+        # Singleton pattern - one blockchain per proccess.
+        if "blockchain" in registry:
+            return registry["blockchain"]
+        self = super().__new__(cls, *args, **kwargs)
+        registry["blockchain"] = self
+        return self
+
     def __init__(self):
-        self.transactions = {}
-        self.spent_transactions = {}
+        # Avoid recursion on trying to get same instance.
+        if hasattr(self, "bootstrapped"):
+            return
+
+        self.bootstrapped = True
+        self.file = registry["blockchain_file"]
+        self.blocks = []
+
         self.transaction_pool = {}
-        # self.blockchain_instance = register["blockchain_instance"]
+
+        # TODO: do not load all blockchain into memory
+        # just scan to get the unspent transaction outputs and metadata
+        self.load_blocks()
+        self.verify()
+
 
     def add_transaction(self, transaction):
+        """Adds a transaction to the transaction pool."""
+
         self.validate_inputs(transaction)
         transaction.verify()
         self.transaction_pool[transaction.ID] = transaction
@@ -297,3 +342,59 @@ class BlockChain:
         except Exception as error:
             raise WalletError from error
         return output
+
+    def load_blocks(self):
+        with open(self.file, "rb") as file_:
+            data = file_.read()
+        self.blocks[:] = []
+        offset = 0
+        while offset < len(data):
+            block = Block.from_data(data, offset)
+            offset = block._offset
+            self.blocks.append(block)
+        self.last_read_block = self.blocks[-1].number
+
+    def commit_unwriten_blocks(self):
+        with open(self.file, "ab") as file_:
+            for i,block in enumerate(self.blocks):
+                block.verify()
+                if block.number <= self.last_read_block:
+                    continue
+                if i:  # skip when writing block zero.
+                    self.verify_block_in_chain(block, i - 1)
+                file_.write(block.serialize())
+        self.last_read_block = self.blocks[-1].number
+
+    def verify_block_in_chain(self, block, previous_block_index=-1):
+        previous_hash = self.blocks[previous_block_index].hash()
+        if previous_hash != block.previous_block:
+            raise BlockError("Previous block address don't match the one in chain")
+
+    def verify(self):
+        for i, block in enumerate(self.blocks):
+            block.verify()
+            if i:
+                self.verify_block_in_chain(block, i - 1)
+
+    def __getitem__(self, index):
+        return self.blocks[index]
+
+    def __setitem__(self, index, value):
+        raise RuntimeError("Can't change blocks on the chain")
+
+    def __delitem__(self, index):
+        raise RuntimeError("Can't change blocks on the chain")
+
+    def __len__(self):
+        return len(self.data)
+
+    def insert(self, index, value):
+        raise RuntimeError("Can't change blocks on the chain")
+
+    def append(self, block):
+        # TODO: verify
+        self.verify_block_in_chain(block)
+        self.blocks.append(block)
+
+    def __repr__(self):
+        return f"Blockchain with {len(self.blocks)} valid blocks"
