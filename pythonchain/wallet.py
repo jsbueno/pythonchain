@@ -33,3 +33,9 @@ class Wallet(base.Base):
         }
 
         return response
+
+    def balance(self, format=True):
+        value = sum(output.amount for tr_id, index, output in block.BlockChain().unspent_outputs(filter=self.public_key))
+        if format:
+            return f"{value/block.TOKENMULTIPLIER:.02f}"
+        return value

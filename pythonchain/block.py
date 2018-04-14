@@ -1,4 +1,5 @@
 from collections.abc import Sequence, Iterable, MutableSequence
+from collections import OrderedDict
 import itertools
 import uuid
 
@@ -204,6 +205,20 @@ class Block(base.Base):
         super().__init__(**kwargs)
         self.state = "new"
 
+    def prepare(self):
+        """Prepares block acording to current chain so
+        that it gets ready to be mined.
+
+        If no transactions have been manually added prior to calling
+        this, will pick all transactions in the blockchain pool.
+        """
+        if not self.transactions:
+            self.fetch_transactions()
+        previous_block = BlockChain()[-1]
+        self.previous_block = int.from_bytes(previous_block.hash(), "big")
+        self.number = previous_block.number + 1
+        self.make_reward()
+
     def fetch_transactions(self):
         bl = BlockChain()
         self.transactions.fill(bl.transaction_pool.values())
@@ -314,22 +329,14 @@ class BlockChain(MutableSequence):
         transaction.verify()
         self.transaction_pool[transaction.ID] = transaction
 
-    def validate_inputs(transaction):
+    def validate_inputs(self, transaction):
         # check that all inputs are unsent in current blockchain state.
-        inputs = {tr.ID for id in transaction.inputs}
+        inputs = {tr for tr in transaction.inputs}
         for past_transaction in self.all_transactions():
-            for inp in past_transactions.inputs:
+            for inp in past_transaction.inputs:
                 if inp.transaction in inputs:
                     raise AlreadySpentError
-
-    def get_transaction(self, id):
-        try:
-            return self.transactions[id]
-        except KeyError:
-            return self.fetch_transaction(id)
-
-    def fetch_transaction(self, id):
-        raise NotImplementedError
+        # TODO: check inputs against inputs in transactions in self.transaction_pool
 
     def all_transactions(self):
         # TODO: return transactions from all blocks in the chain
@@ -337,7 +344,7 @@ class BlockChain(MutableSequence):
 
     def get_output_from_input(self, input):
         try:
-            inp_transaction = self.get_transaction(input.transaction)
+            inp_transaction = self.transactions[input.transaction]
             output = inp_transaction.outputs[input.index]
         except Exception as error:
             raise WalletError from error
@@ -353,6 +360,13 @@ class BlockChain(MutableSequence):
             offset = block._offset
             self.blocks.append(block)
         self.last_read_block = self.blocks[-1].number
+        self.load_transactions()
+
+    def load_transactions(self):
+        self.transactions = {}
+        for block in self:
+            for transaction in block.transactions:
+                self.transactions[transaction.ID] = transaction
 
     def commit_unwriten_blocks(self):
         with open(self.file, "ab") as file_:
@@ -366,7 +380,7 @@ class BlockChain(MutableSequence):
         self.last_read_block = self.blocks[-1].number
 
     def verify_block_in_chain(self, block, previous_block_index=-1):
-        previous_hash = self.blocks[previous_block_index].hash()
+        previous_hash = int.from_bytes(self.blocks[previous_block_index].hash(), "big")
         if previous_hash != block.previous_block:
             raise BlockError("Previous block address don't match the one in chain")
 
@@ -375,6 +389,25 @@ class BlockChain(MutableSequence):
             block.verify()
             if i:
                 self.verify_block_in_chain(block, i - 1)
+
+    def unspent_outputs(self, filter=None):
+        outputs = {}
+        for block in self:
+            for transaction in block.transactions:
+                outputs[transaction.ID] = local = OrderedDict()
+                for i, output in enumerate(transaction.outputs):
+                    local[i] = output
+                for input in transaction.inputs:
+                    try:
+                        del outputs[input.transaction][input.index]
+                    except (KeyError, IndexError) as error:
+                        raise TransactionError(f"Invalid input for transaction {transaction.ID} found in chain")
+        result = []
+        for tr_id, transactions_local in outputs.items():
+            for index, output in transactions_local.items():
+                if not filter or output.wallet in filter:
+                    result.append((tr_id, index, output))
+        return result
 
     def __getitem__(self, index):
         return self.blocks[index]
