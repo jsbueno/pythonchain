@@ -86,6 +86,9 @@ UInt64 = Int
 class UInt512(Int):
     data_size = 64
 
+class UInt256(Int):
+    data_size = 32
+
 class UInt128(Int):
     data_size = 16
 
