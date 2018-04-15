@@ -37,29 +37,9 @@ class WalletError(TransactionError):
 class AlreadySpentError(TransactionError):
     """Trying to use spent transaction in new transaction"""
 
+
 class AmountError(TransactionError, ValueError):
     """Used when there is an error in the values"""
-
-
-class Wallet(base.Base):
-    public_key = base.String()
-    private_key = base.String()
-
-    def __init__(self, **kwargs):
-        if not kwargs:
-            kwargs.update(self.new_keys())
-        super().__init__(**kwargs)
-
-    def new_keys(self):
-        private_key = ECC.generate(curve="P-256")
-        public_key = private_key.public_key()
-
-        response = {
-            'private_key': private_key.export_key(format='DER').hex(),
-            'public_key': public_key.export_key(format='DER').hex()
-        }
-
-        return response
 
 
 class TransactionOutput(base.Base):
