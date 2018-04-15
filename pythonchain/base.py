@@ -180,6 +180,10 @@ class Base:
 
     @classmethod
     def from_data(cls, data, offset=0):
+        from pathlib import Path
+        if isinstance(data, (str, Path)):
+            with open(data, "rb") as file:
+                data = file.read()
         self = cls()
         for field_name, field in cls.fields.items():
             field_data, offset = field.import_(data, offset)
