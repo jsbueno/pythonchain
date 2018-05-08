@@ -154,7 +154,7 @@ class Transaction(base.Base):
             try:
                 input.sign(wallets[output.wallet])
             except KeyError as error:
-                raise block.WalletError from error
+                raise WalletError from error
 
         # Use the wallet used for the first input to sign the whole transaction
         if self.inputs:
@@ -399,7 +399,7 @@ class BlockChain(MutableSequence):
         raise RuntimeError("Can't change blocks on the chain")
 
     def __len__(self):
-        return len(self.data)
+        return len(self.blocks)
 
     def insert(self, index, value):
         raise RuntimeError("Can't change blocks on the chain")

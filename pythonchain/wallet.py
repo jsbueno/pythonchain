@@ -15,8 +15,8 @@ from pythonchain.runtime import registry
 
 
 class Wallet(base.Base):
-    public_key = base.String()
-    private_key = base.String()
+    public_key = base.ShortString()
+    private_key = base.ShortString()
 
     def __init__(self, **kwargs):
         if not kwargs:

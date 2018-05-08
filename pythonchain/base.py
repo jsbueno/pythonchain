@@ -143,6 +143,17 @@ class String(Field):
         return raw.decode(cls.encoding), end_pos
 
 
+class _shortstr(str):
+    def __repr__(self):
+        v = super().__repr__()
+        return v[:5] + "..." + v[-5:]
+
+
+class ShortString(String):
+    def __get__(self, instance, owner=None):
+        return _shortstr(super().__get__(instance, owner=None))
+
+
 class Decimal(String):
 
     def __init__(self, default="0"):
@@ -192,6 +203,12 @@ class Base:
         # from an outer stream
         self._offset = offset
         return self
+
+    def __repr__(self):
+        return "<{0}: {{{1}}}>".format(
+            self.__class__.__name__,
+            ",\n".join("{}: {}".format(field, repr(getattr(self, field))) for field in self.fields)
+        )
 
 
 class ModelField(Field):
