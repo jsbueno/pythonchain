@@ -358,6 +358,7 @@ class BlockChain(MutableSequence):
                     self.verify_block_in_chain(block, i - 1)
                 file_.write(block.serialize())
         self.last_read_block = self.blocks[-1].number
+        self.load_transactions()
 
     def verify_block_in_chain(self, block, previous_block_index=-1):
         previous_hash = int.from_bytes(self.blocks[previous_block_index].hash(), "big")
