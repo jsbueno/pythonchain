@@ -13,7 +13,7 @@ from Crypto.Signature import DSS
 from pythonchain import base
 from pythonchain.runtime import registry
 
-TOKENMULTIPLIER = 100000000  # 100 million
+TOKENMULTIPLIER = 100  # 100000000  # 100 million
 
 class TransactionError(Exception):
     """Base Blockchain Exception"""
