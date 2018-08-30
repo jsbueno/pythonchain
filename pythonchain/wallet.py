@@ -39,3 +39,30 @@ class Wallet(base.Base):
         if format:
             return f"{value/block.TOKENMULTIPLIER:.02f}"
         return value
+
+    def simple_transaction(self, target, amount, fee=0):
+        bl = block.BlockChain()
+        outputs = bl.unspent_outputs(filter=self.public_key)
+        for output in outputs:
+            if output[2].amount >= (amount + fee):
+                break
+        else:
+            raise ValueError("No single unspent output have this much money")
+        ti = block.TransactionInput()
+        ti.transaction = output[0]
+        ti.index = output[1]
+        to1 = block.TransactionOutput()
+        to1.wallet = target.public_key if isinstance(target, Wallet) else target
+        to1.amount = amount
+
+        change = output[2].amount - amount - fee
+        to2 = block.TransactionOutput()
+        to2.wallet = self.public_key
+        to2.amount = change
+
+        tr = block.Transaction()
+        tr.inputs.append(ti)
+        tr.outputs.extend([to1, to2])
+        tr.sign_transaction(self)
+        return tr
+
