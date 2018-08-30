@@ -409,6 +409,8 @@ class BlockChain(MutableSequence):
         # TODO: verify
         self.verify_block_in_chain(block)
         self.blocks.append(block)
+        for transaction in block.transactions:
+            self.transaction_pool.pop(transaction.ID, None)
 
     def __repr__(self):
         return f"Blockchain with {len(self.blocks)} valid blocks"
