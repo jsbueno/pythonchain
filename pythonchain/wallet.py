@@ -43,25 +43,32 @@ class Wallet(base.Base):
     def simple_transaction(self, target, amount, fee=0):
         bl = block.BlockChain()
         outputs = bl.unspent_outputs(filter=self.public_key)
+        partial_balance = 0
+        to_use = []
         for output in outputs:
-            if output[2].amount >= (amount + fee):
+            partial_balance += output[2].amount
+            to_use.append(output)
+            if partial_balance >= (amount + fee):
                 break
         else:
             raise ValueError("No single unspent output have this much money")
-        ti = block.TransactionInput()
-        ti.transaction = output[0]
-        ti.index = output[1]
+        inputs=[]
+        for output in to_use:
+            ti = block.TransactionInput()
+            ti.transaction = output[0]
+            ti.index = output[1]
+            inputs.append(ti)
         to1 = block.TransactionOutput()
         to1.wallet = target.public_key if isinstance(target, Wallet) else target
         to1.amount = amount
 
-        change = output[2].amount - amount - fee
+        change = partial_balance - amount - fee
         to2 = block.TransactionOutput()
         to2.wallet = self.public_key
         to2.amount = change
 
         tr = block.Transaction()
-        tr.inputs.append(ti)
+        tr.inputs.extend(inputs)
         tr.outputs.extend([to1, to2])
         tr.sign_transaction(self)
         return tr
